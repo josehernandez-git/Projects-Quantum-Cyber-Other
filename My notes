@@ -1,102 +1,63 @@
-import os
-import re
-import pandas as pd
 import streamlit as st
-from PyPDF2 import PdfReader
 from io import BytesIO
+from pypdf import PdfReader
+import pandas as pd
 
-# Define keywords to search for
-KEYWORDS = ["ITEM NO", "QUANTITY", "UNIT PRICE", "AMOUNT"]
+# Streamlit file uploader for PDF
+st.title("PDF Keyword Extraction App")
+uploaded_file = st.file_uploader("Upload a PDF document", type=["pdf"])
 
-# Function to extract specific data from the PDF
-def extract_specific_data(pdf_file_path):
-    extracted_data = []
+if uploaded_file is not None:
+    # 1. Read PDF and extract text
+    pdf_reader = PdfReader(uploaded_file)  # UploadedFile is file-like [oai_citation_attribution:15‡docs.streamlit.io](https://docs.streamlit.io/develop/api-reference/widgets/st.file_uploader#:~:text=The%20UploadedFile%20class%20is%20a,anywhere%20a%20file%20is%20expected)
+    full_text = ""
+    for page in pdf_reader.pages:
+        text = page.extract_text()
+        if text:  # ensure page has text
+            full_text += text + "\n"
     
-    with open(pdf_file_path, "rb") as file:
-        reader = PdfReader(file)
-
-        for page_num, page in enumerate(reader.pages):
-            page_text = page.extract_text()
-            if page_text:
-                text_lines = page_text.split("\n")  # Split text into individual lines
-
-                # Temporary dictionary to store found values
-                temp_data = {"Page": page_num + 1, "Item No": "N/A", "Quantity": 0, "Unit Price": 0.0, "Amount": 0.0}
-
-                # Iterate through lines to find keywords
-                for i, line in enumerate(text_lines):
-                    line_upper = line.strip().upper()  # Normalize text to uppercase
-
-                    if "ITEM NO" in line_upper and i + 1 < len(text_lines):
-                        temp_data["Item No"] = text_lines[i + 1].strip()
-                    elif "QUANTITY" in line_upper and i + 1 < len(text_lines):
-                        temp_data["Quantity"] = re.sub(r"[^\d]", "", text_lines[i + 1].strip())  # Extract digits only
-                    elif "UNIT PRICE" in line_upper and i + 1 < len(text_lines):
-                        temp_data["Unit Price"] = re.sub(r"[^\d.]", "", text_lines[i + 1].strip())  # Extract price
-                    elif "AMOUNT" in line_upper and i + 1 < len(text_lines):
-                        temp_data["Amount"] = re.sub(r"[^\d.]", "", text_lines[i + 1].strip())  # Extract amount
-
-                # Ensure at least one valid field exists before adding to results
-                if temp_data["Item No"] != "N/A" or temp_data["Quantity"] > 0:
-                    # Convert to proper data types
-                    try:
-                        temp_data["Quantity"] = int(temp_data["Quantity"])
-                    except ValueError:
-                        temp_data["Quantity"] = 0
-
-                    try:
-                        temp_data["Unit Price"] = float(temp_data["Unit Price"])
-                    except ValueError:
-                        temp_data["Unit Price"] = 0.0
-
-                    try:
-                        temp_data["Amount"] = float(temp_data["Amount"])
-                    except ValueError:
-                        temp_data["Amount"] = 0.0
-
-                    extracted_data.append(temp_data)  # Append data from this page
-
-    return extracted_data
-
-# Function to save extracted data to an Excel file
-def save_to_excel(data):
-    df = pd.DataFrame(data, columns=["Page", "Item No", "Quantity", "Unit Price", "Amount"])
+    # 2. Identify paragraphs (group lines) and filter by keywords
+    paragraphs = []
+    curr_para_lines = []
+    blank_count = 0
+    for line in full_text.splitlines():
+        if line.strip() == "":
+            blank_count += 1
+            if curr_para_lines:
+                # end of a paragraph
+                paragraphs.append("\n".join(curr_para_lines))
+                curr_para_lines = []
+            if blank_count >= 3:
+                # three consecutive blank lines -> stop further processing
+                break
+        else:
+            blank_count = 0
+            curr_para_lines.append(line)
+    if curr_para_lines:
+        paragraphs.append("\n".join(curr_para_lines))
+    
+    keywords = ["item no", "quantity", "unit price", "amount"]
+    extracted_paras = [para for para in paragraphs 
+                       if any(k in para.lower() for k in keywords)]
+    
+    # 3. Save extracted paragraphs to an Excel file (in memory)
+    df = pd.DataFrame({"Extracted Text": extracted_paras})
     output = BytesIO()
-    df.to_excel(output, index=False, engine="openpyxl")
-    output.seek(0)
-    return output
-
-# Streamlit UI
-st.title("PDF Data Extraction - Specific Fields")
-
-# File uploader
-uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
-
-if uploaded_file:
-    # Save uploaded file temporarily
-    temp_pdf_path = "uploaded_document.pdf"
-    with open(temp_pdf_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-
-    # Extract specific data from PDF
-    extracted_data = extract_specific_data(temp_pdf_path)
-
-    if extracted_data:
-        st.success("PDF processed successfully!")
-
-        # Display extracted data
-        df_display = pd.DataFrame(extracted_data)
-        st.dataframe(df_display)
-
-        # Save extracted data to Excel
-        excel_data = save_to_excel(extracted_data)
-
-        # Provide a download button for the Excel file
-        st.download_button(
-            label="Download Extracted Data",
-            data=excel_data,
-            file_name="extracted_data.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    else:
-        st.error("No matching data found in the PDF.")
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df.to_excel(writer, index=False)
+        # Set wrap text format for the "Extracted Text" column
+        workbook  = writer.book
+        worksheet = writer.sheets['Sheet1']
+        wrap_format = workbook.add_format({'text_wrap': True})
+        worksheet.set_column(0, 0, 60, wrap_format)  # 60 width for readability
+    excel_data = output.getvalue()
+    
+    # 4. Provide download button for the Excel file
+    st.download_button(
+        label="Download Extracted Data as Excel",
+        data=excel_data,
+        file_name="extracted_paragraphs.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    
+    st.success(f"Found {len(extracted_paras)} paragraphs containing the keywords.")
