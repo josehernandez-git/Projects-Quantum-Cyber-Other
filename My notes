@@ -1,63 +1,100 @@
 import streamlit as st
-from io import BytesIO
-from pypdf import PdfReader
+import fitz  # PyMuPDF for PDF reading
 import pandas as pd
+import re
+from io import BytesIO
 
-# Streamlit file uploader for PDF
-st.title("PDF Keyword Extraction App")
-uploaded_file = st.file_uploader("Upload a PDF document", type=["pdf"])
+# Title of the app
+st.title("PDF Keyword Paragraph Extractor")
+
+# File uploader accepts PDF files
+uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
 
 if uploaded_file is not None:
-    # 1. Read PDF and extract text
-    pdf_reader = PdfReader(uploaded_file)  # UploadedFile is file-like [oai_citation_attribution:15‡docs.streamlit.io](https://docs.streamlit.io/develop/api-reference/widgets/st.file_uploader#:~:text=The%20UploadedFile%20class%20is%20a,anywhere%20a%20file%20is%20expected)
+    # Read file into bytes and open with PyMuPDF
+    pdf_bytes = uploaded_file.getvalue()
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    
+    # Extract all text from the PDF
     full_text = ""
-    for page in pdf_reader.pages:
-        text = page.extract_text()
-        if text:  # ensure page has text
-            full_text += text + "\n"
+    for page in doc:
+        full_text += page.get_text() + "\n"
+
+    # Define target keywords (case-insensitive search)
+    keywords = ["ITEM NO", "QUANTITY", "UNIT PRICE", "AMOUNT"]
+    keywords_lower = [kw.lower() for kw in keywords]
     
-    # 2. Identify paragraphs (group lines) and filter by keywords
-    paragraphs = []
-    curr_para_lines = []
-    blank_count = 0
-    for line in full_text.splitlines():
-        if line.strip() == "":
+    # Split text into lines to identify paragraphs
+    lines = full_text.splitlines()
+    extracted_paragraphs = []  # List to hold paragraphs containing keywords
+    
+    current_paragraph = []
+    blank_count = 0  # Ensure blank_count is always an integer
+
+    for line in lines:
+        if line.strip() == "":  # Detect blank lines
             blank_count += 1
-            if curr_para_lines:
-                # end of a paragraph
-                paragraphs.append("\n".join(curr_para_lines))
-                curr_para_lines = []
             if blank_count >= 3:
-                # three consecutive blank lines -> stop further processing
-                break
+                break  # Stop extraction after three consecutive blank lines
+
+            if current_paragraph:
+                # Join current collected lines into a paragraph
+                paragraph_text = "\n".join(current_paragraph).strip()
+                # Check if any keyword is in this paragraph
+                if any(kw in paragraph_text.lower() for kw in keywords_lower):
+                    extracted_paragraphs.append(paragraph_text)
+                # Reset for next paragraph
+                current_paragraph = []
         else:
-            blank_count = 0
-            curr_para_lines.append(line)
-    if curr_para_lines:
-        paragraphs.append("\n".join(curr_para_lines))
-    
-    keywords = ["item no", "quantity", "unit price", "amount"]
-    extracted_paras = [para for para in paragraphs 
-                       if any(k in para.lower() for k in keywords)]
-    
-    # 3. Save extracted paragraphs to an Excel file (in memory)
-    df = pd.DataFrame({"Extracted Text": extracted_paras})
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        df.to_excel(writer, index=False)
-        # Set wrap text format for the "Extracted Text" column
-        workbook  = writer.book
-        worksheet = writer.sheets['Sheet1']
-        wrap_format = workbook.add_format({'text_wrap': True})
-        worksheet.set_column(0, 0, 60, wrap_format)  # 60 width for readability
-    excel_data = output.getvalue()
-    
-    # 4. Provide download button for the Excel file
-    st.download_button(
-        label="Download Extracted Data as Excel",
-        data=excel_data,
-        file_name="extracted_paragraphs.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-    
-    st.success(f"Found {len(extracted_paras)} paragraphs containing the keywords.")
+            blank_count = 0  # Reset count if a non-empty line is found
+            current_paragraph.append(line)  # Add to current paragraph
+
+    # Handle the last paragraph if the file didn't end with 3 blanks
+    if current_paragraph:
+        paragraph_text = "\n".join(current_paragraph).strip()
+        if any(kw in paragraph_text.lower() for kw in keywords_lower):
+            extracted_paragraphs.append(paragraph_text)
+
+    # If any paragraphs were extracted, create an Excel file
+    if extracted_paragraphs:
+        # Create a DataFrame
+        df = pd.DataFrame({"Extracted Section": extracted_paragraphs})
+
+        # Convert numerical fields safely
+        def safe_convert(value, dtype=float):
+            """ Safely convert values to numeric types to avoid errors """
+            try:
+                return dtype(re.sub(r"[^\d.]", "", value)) if isinstance(value, str) else dtype(value)
+            except ValueError:
+                return 0
+
+        # Apply safe conversion to numeric columns if needed
+        if "Quantity" in df.columns:
+            df["Quantity"] = df["Quantity"].apply(lambda x: safe_convert(x, int))
+        if "Unit Price" in df.columns:
+            df["Unit Price"] = df["Unit Price"].apply(lambda x: safe_convert(x, float))
+        if "Amount" in df.columns:
+            df["Amount"] = df["Amount"].apply(lambda x: safe_convert(x, float))
+
+        # Save the extracted data to an in-memory Excel file
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df.to_excel(writer, index=False, sheet_name='Extracted')
+            # Apply text wrap format for readability
+            workbook = writer.book
+            worksheet = writer.sheets['Extracted']
+            wrap_format = workbook.add_format({'text_wrap': True})
+            worksheet.set_column(0, 0, 60, wrap_format)  # 60 width for better visibility
+        excel_data = output.getvalue()  # Get the binary content of the Excel file
+
+        # Provide a download button for the Excel file
+        st.download_button(
+            label="📥 Download Extracted Data",
+            data=excel_data,
+            file_name="extracted_paragraphs.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+        st.success(f"✅ Successfully extracted {len(extracted_paragraphs)} paragraphs containing the keywords.")
+    else:
+        st.warning("⚠ No paragraphs found containing the specified keywords.")
