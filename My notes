@@ -274,3 +274,141 @@ if os.path.exists(EXCEL_FILE):
     ax.set_ylabel("Cost ($)")
     st.pyplot(fig)
 
+import os
+import re
+import pandas as pd
+import streamlit as st
+import matplotlib.pyplot as plt
+from PyPDF2 import PdfReader
+from datetime import datetime
+
+# File paths for storing extracted data
+EXCEL_FILE = "contract_data.xlsx"
+VERSION_FOLDER = "versions"
+
+# Ensure version folder exists
+os.makedirs(VERSION_FOLDER, exist_ok=True)
+
+# Function to extract ITEM NO, QUANTITY, UNIT PRICE, and AMOUNT from each page of the PDF
+def extract_contract_data(pdf_file_path):
+    with open(pdf_file_path, "rb") as file:
+        reader = PdfReader(file)
+        extracted_data = []
+
+        # Read through each page of the PDF
+        for page in reader.pages:
+            text_lines = page.extract_text().split("\n") if page.extract_text() else []
+            
+            # Loop through each line to find relevant fields
+            for i, line in enumerate(text_lines):
+                if "ITEM NO" in line.upper():
+                    item_no = text_lines[i + 1].strip() if i + 1 < len(text_lines) else "N/A"
+                elif "QUANTITY" in line.upper():
+                    quantity = text_lines[i + 1].strip() if i + 1 < len(text_lines) else "N/A"
+                elif "UNIT PRICE" in line.upper():
+                    unit_price = text_lines[i + 1].strip() if i + 1 < len(text_lines) else "N/A"
+                elif "AMOUNT" in line.upper():
+                    amount = text_lines[i + 1].strip() if i + 1 < len(text_lines) else "N/A"
+                    
+                    # Convert numbers to proper format
+                    item_no = item_no if item_no != "N/A" else ""
+                    quantity = re.sub(r"[^\d.]", "", quantity) if quantity != "N/A" else "0"
+                    unit_price = re.sub(r"[^\d.]", "", unit_price) if unit_price != "N/A" else "0.0"
+                    amount = re.sub(r"[^\d.]", "", amount) if amount != "N/A" else "0.0"
+                    
+                    # Try to convert to appropriate data types
+                    try:
+                        quantity = int(quantity)
+                    except ValueError:
+                        quantity = 0
+                    try:
+                        unit_price = float(unit_price)
+                    except ValueError:
+                        unit_price = 0.0
+                    try:
+                        amount = float(amount)
+                    except ValueError:
+                        amount = 0.0
+
+                    # Store extracted values in a dictionary
+                    extracted_data.append({
+                        "Item No": item_no,
+                        "Quantity": quantity,
+                        "Unit Price": unit_price,
+                        "Amount": amount
+                    })
+
+    return extracted_data
+
+# Function to save extracted data to Excel
+def save_to_excel(new_data):
+    if os.path.exists(EXCEL_FILE):
+        df = pd.read_excel(EXCEL_FILE)
+    else:
+        df = pd.DataFrame(columns=["Item No", "Quantity", "Unit Price", "Amount"])
+
+    # Append new data
+    df = pd.concat([df, pd.DataFrame(new_data)], ignore_index=True)
+
+    # Save versioned file
+    versioned_file = os.path.join(VERSION_FOLDER, f"contract_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
+    df.to_excel(versioned_file, index=False)
+    
+    # Save main file
+    df.to_excel(EXCEL_FILE, index=False)
+    
+    return df
+
+# Streamlit Dashboard
+st.title("Contract Data Extraction Dashboard")
+
+# File uploader
+uploaded_file = st.file_uploader("Upload a contract PDF", type=["pdf"])
+
+if uploaded_file:
+    # Save uploaded file temporarily
+    temp_pdf_path = "temp_contract.pdf"
+    with open(temp_pdf_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+
+    # Extract data from PDF
+    extracted_data = extract_contract_data(temp_pdf_path)
+
+    # Show extracted data
+    if extracted_data:
+        st.subheader("Extracted Contract Data")
+        st.dataframe(pd.DataFrame(extracted_data))
+
+        # Save data to Excel
+        if st.button("Save to Database"):
+            df = save_to_excel(extracted_data)
+            st.success("Data saved successfully!")
+    else:
+        st.error("No valid contract data found in the PDF.")
+
+# Load existing data if available
+if os.path.exists(EXCEL_FILE):
+    df = pd.read_excel(EXCEL_FILE)
+    st.subheader("Current Contract Database")
+    st.dataframe(df)
+
+    # Editable table
+    edited_df = st.experimental_data_editor(df)
+
+    if st.button("Update Database"):
+        edited_df.to_excel(EXCEL_FILE, index=False)
+        st.success("Database updated successfully!")
+
+    # Display statistics
+    total_items = df.shape[0]
+    total_amount = df["Amount"].sum()
+
+    st.write(f"**Total Items:** {total_items}")
+    st.write(f"**Total Amount:** ${total_amount:,.2f}")
+
+    # Plot amount distribution by item
+    fig, ax = plt.subplots()
+    df.groupby("Item No")["Amount"].sum().plot(kind="bar", ax=ax)
+    ax.set_title("Total Amount per Item")
+    ax.set_ylabel("Amount ($)")
+    st.pyplot(fig)
