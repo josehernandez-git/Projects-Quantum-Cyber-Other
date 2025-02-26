@@ -151,3 +151,70 @@ if os.path.exists(EXCEL_FILE):
     st.pyplot(fig)
 else:
     st.info("No existing contract database found.")
+
+
+
+
+
+
+
+import os
+import pandas as pd
+import streamlit as st
+from PyPDF2 import PdfReader
+from io import BytesIO
+
+# Function to extract all text from PDF
+def extract_text_from_pdf(pdf_file_path):
+    with open(pdf_file_path, "rb") as file:
+        reader = PdfReader(file)
+        extracted_data = []
+
+        # Read through each page of the PDF
+        for i, page in enumerate(reader.pages):
+            page_text = page.extract_text()
+            if page_text:
+                text_lines = page_text.split("\n")  # Split text into lines
+                for line in text_lines:
+                    extracted_data.append([f"Page {i+1}", line.strip()])  # Store page number and line content
+
+    return extracted_data
+
+# Function to save extracted data to an Excel file
+def save_to_excel(data):
+    df = pd.DataFrame(data, columns=["Page", "Extracted Text"])
+    output = BytesIO()
+    df.to_excel(output, index=False, engine="openpyxl")
+    output.seek(0)
+    return output
+
+# Streamlit UI
+st.title("PDF to Excel Extractor")
+
+# File uploader
+uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
+
+if uploaded_file:
+    # Save uploaded file temporarily
+    temp_pdf_path = "uploaded_document.pdf"
+    with open(temp_pdf_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+
+    # Extract text from PDF
+    extracted_data = extract_text_from_pdf(temp_pdf_path)
+
+    if extracted_data:
+        st.success("PDF processed successfully!")
+        
+        # Save extracted data to Excel
+        excel_data = save_to_excel(extracted_data)
+
+        # Provide a download button for the Excel file
+        st.download_button(
+            label="Download Extracted Data",
+            data=excel_data,
+            file_name="extracted_data.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.error("No text found in the PDF.")
