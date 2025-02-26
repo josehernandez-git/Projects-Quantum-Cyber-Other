@@ -2,194 +2,72 @@ import os
 import re
 import pandas as pd
 import streamlit as st
-import matplotlib.pyplot as plt
-from PyPDF2 import PdfReader
-from datetime import datetime
-
-# Constants
-EXCEL_FILE = "contract_data.xlsx"
-VERSION_FOLDER = "versions"
-os.makedirs(VERSION_FOLDER, exist_ok=True)
-expected_columns = ["Item No", "Quantity", "Unit Price", "Amount"]
-
-# PDF extraction function
-def extract_contract_data(pdf_file_path):
-    extracted_data = []
-
-    with open(pdf_file_path, "rb") as file:
-        reader = PdfReader(file)
-
-        for page in reader.pages:
-            text_lines = page.extract_text().split("\n") if page.extract_text() else []
-
-            # Initialize temp variables
-            item_no, quantity, unit_price, amount = None, None, None, None
-
-            for i, line in enumerate(text_lines):
-                line_upper = line.strip().upper()
-
-                if "ITEM NO" in line.upper() and i + 1 < len(text_lines):
-                    item_no = text_lines[i + 1].strip()
-
-                elif "QUANTITY" in line.upper():
-                    quantity = text_lines[i + 1].strip() if i + 1 < len(text_lines) else "0"
-
-                elif "UNIT PRICE" in line.upper():
-                    unit_price = text_lines[i + 1].strip() if i + 1 < len(text_lines) else "0.0"
-
-                elif "AMOUNT" in line.upper():
-                    amount = text_lines[i + 1].strip() if i + 1 < len(text_lines) else "0.0"
-
-                    # Clean and convert data safely
-                    def safe_convert(val, dtype=float):
-                        if isinstance(val := val_cleanup(val=val), (float, int)):
-                            return val
-                        try:
-                            return dtype(val)
-                        except:
-                            return default
-
-                    item_no_clean = item_no if item_no else "N/A"
-                    quantity_clean = re.sub(r"[^\d.]", "", str(quantity)) if quantity else "0"
-                    unit_price_clean = re.sub(r"[^\d.]", "", str(unit_price)) if unit_price else "0.0"
-                    amount_clean = re.sub(r"[^\d.]", "", str(amount)) if amount else "0.0"
-
-                    # Convert values
-                    try:
-                        quantity_clean = int(quantity_clean)
-                    except:
-                        quantity_clean = 0
-
-                    try:
-                        unit_price_clean = float(unit_price_clean)
-                    except:
-                        unit_price_clean = 0.0
-
-                    try:
-                        amount_clean = float(amount_clean)
-                    except:
-                        amount_clean = 0.0
-
-                    extracted_row = {
-                        "Item No": item_no_clean,
-                        "Quantity": quantity_clean,
-                        "Unit Price": unit_price_clean,
-                        "Amount": amount_clean
-                    }
-
-                    extracted_data.append(extracted_row)
-
-                    # Reset for next item
-                    item_no, quantity, unit_price, amount = None, None, None, None
-
-    return extracted_data
-
-# Save data to Excel with versioning
-def save_to_excel(data):
-    if os.path.exists(EXCEL_FILE):
-        df_existing = pd.read_excel(EXCEL_FILE)
-    else:
-        df_existing = pd.DataFrame(columns=["Item No", "Quantity", "Unit Price", "Amount"])
-
-    df_new = pd.DataFrame(data)
-    df_final = pd.concat([df_existing, df_new], ignore_index=True)
-
-    versioned_file = f"{VERSION_FOLDER}/contracts_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    df_existing.to_excel(versioned_file, index=False)
-    df_existing.to_excel(EXCEL_FILE, index=False)
-
-    return df_existing
-
-# Streamlit Dashboard
-st.title("Contract Data Extraction Dashboard")
-
-uploaded_file = st.file_uploader("Upload Contract PDF", type="pdf")
-
-if uploaded_file:
-    temp_pdf = "uploaded_contract.pdf"
-    with open(temp_pdf, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-
-    extracted_data = extract_contract_data(temp_pdf)
-
-    if extracted_data:
-        st.subheader("Extracted Data")
-        st.dataframe(extracted_data)
-
-        if st.button("Save to Excel"):
-            df_contracts = save_to_excel(extracted_data)
-            st.success("Contract data saved successfully!")
-else:
-    st.info("Please upload a PDF file to extract data.")
-
-# Load existing data
-if os.path.exists(EXCEL_FILE):
-    df_existing = pd.read_excel(EXCEL_FILE)
-    st.subheader("Current Contract Database")
-    edited_df = st.data_editor(df_existing)
-
-    if st.button("Update Database"):
-        edited_df = edited_df.astype({
-            "Quantity": int, "Unit Price": float, "Amount": float
-        }, errors='ignore')
-        edited_df.to_excel(EXCEL_FILE, index=False)
-        st.success("Database updated successfully!")
-
-    # Statistics
-    total_items = len(df_existing)
-    total_amount = df_existing["Amount"].sum()
-
-    st.write(f"**Total Items:** {total_items}")
-    st.write(f"**Total Amount:** ${total_amount:,.2f}")
-
-    # Visualization
-    fig, ax = plt.subplots()
-    df_existing.groupby("Item No")["Amount"].sum().plot(kind="bar", ax=ax)
-    ax.set_title("Total Amount per Item No")
-    ax.set_ylabel("Amount ($)")
-    ax.set_xlabel("Item No")
-    st.pyplot(fig)
-else:
-    st.info("No existing contract database found.")
-
-
-
-
-
-
-
-import os
-import pandas as pd
-import streamlit as st
 from PyPDF2 import PdfReader
 from io import BytesIO
 
-# Function to extract all text from PDF
-def extract_text_from_pdf(pdf_file_path):
+# Define keywords to search for
+KEYWORDS = ["ITEM NO", "QUANTITY", "UNIT PRICE", "AMOUNT"]
+
+# Function to extract specific data from the PDF
+def extract_specific_data(pdf_file_path):
+    extracted_data = []
+    
     with open(pdf_file_path, "rb") as file:
         reader = PdfReader(file)
-        extracted_data = []
 
-        # Read through each page of the PDF
-        for i, page in enumerate(reader.pages):
+        for page_num, page in enumerate(reader.pages):
             page_text = page.extract_text()
             if page_text:
-                text_lines = page_text.split("\n")  # Split text into lines
-                for line in text_lines:
-                    extracted_data.append([f"Page {i+1}", line.strip()])  # Store page number and line content
+                text_lines = page_text.split("\n")  # Split text into individual lines
+
+                # Temporary dictionary to store found values
+                temp_data = {"Page": page_num + 1, "Item No": "N/A", "Quantity": 0, "Unit Price": 0.0, "Amount": 0.0}
+
+                # Iterate through lines to find keywords
+                for i, line in enumerate(text_lines):
+                    line_upper = line.strip().upper()  # Normalize text to uppercase
+
+                    if "ITEM NO" in line_upper and i + 1 < len(text_lines):
+                        temp_data["Item No"] = text_lines[i + 1].strip()
+                    elif "QUANTITY" in line_upper and i + 1 < len(text_lines):
+                        temp_data["Quantity"] = re.sub(r"[^\d]", "", text_lines[i + 1].strip())  # Extract digits only
+                    elif "UNIT PRICE" in line_upper and i + 1 < len(text_lines):
+                        temp_data["Unit Price"] = re.sub(r"[^\d.]", "", text_lines[i + 1].strip())  # Extract price
+                    elif "AMOUNT" in line_upper and i + 1 < len(text_lines):
+                        temp_data["Amount"] = re.sub(r"[^\d.]", "", text_lines[i + 1].strip())  # Extract amount
+
+                # Ensure at least one valid field exists before adding to results
+                if temp_data["Item No"] != "N/A" or temp_data["Quantity"] > 0:
+                    # Convert to proper data types
+                    try:
+                        temp_data["Quantity"] = int(temp_data["Quantity"])
+                    except ValueError:
+                        temp_data["Quantity"] = 0
+
+                    try:
+                        temp_data["Unit Price"] = float(temp_data["Unit Price"])
+                    except ValueError:
+                        temp_data["Unit Price"] = 0.0
+
+                    try:
+                        temp_data["Amount"] = float(temp_data["Amount"])
+                    except ValueError:
+                        temp_data["Amount"] = 0.0
+
+                    extracted_data.append(temp_data)  # Append data from this page
 
     return extracted_data
 
 # Function to save extracted data to an Excel file
 def save_to_excel(data):
-    df = pd.DataFrame(data, columns=["Page", "Extracted Text"])
+    df = pd.DataFrame(data, columns=["Page", "Item No", "Quantity", "Unit Price", "Amount"])
     output = BytesIO()
     df.to_excel(output, index=False, engine="openpyxl")
     output.seek(0)
     return output
 
 # Streamlit UI
-st.title("PDF to Excel Extractor")
+st.title("PDF Data Extraction - Specific Fields")
 
 # File uploader
 uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
@@ -200,12 +78,16 @@ if uploaded_file:
     with open(temp_pdf_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
 
-    # Extract text from PDF
-    extracted_data = extract_text_from_pdf(temp_pdf_path)
+    # Extract specific data from PDF
+    extracted_data = extract_specific_data(temp_pdf_path)
 
     if extracted_data:
         st.success("PDF processed successfully!")
-        
+
+        # Display extracted data
+        df_display = pd.DataFrame(extracted_data)
+        st.dataframe(df_display)
+
         # Save extracted data to Excel
         excel_data = save_to_excel(extracted_data)
 
@@ -217,4 +99,4 @@ if uploaded_file:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
     else:
-        st.error("No text found in the PDF.")
+        st.error("No matching data found in the PDF.")
