@@ -1,279 +1,3 @@
-import streamlit as st
-import pandas as pd
-import re
-from PyPDF2 import PdfReader  # PyPDF2 library to read PDF content [oai_citation_attribution:5‡python.plainenglish.io](https://python.plainenglish.io/streamlit-extract-text-data-from-your-pdf-file-75201efaf9af#:~:text=if%20pdf%20is%20not%20None%3A,extract_text%28%29%E2%80%A6)
-from datetime import datetime
-
-# Set the page title and layout for the Streamlit app
-st.set_page_config(page_title="Contract Dashboard", layout="wide")
-
-# Title of the dashboard
-st.title("Contract Management Dashboard")
-
-# 1. File upload section (for PDF contract)
-st.header("Upload Contract PDF")
-uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")  #  [oai_citation_attribution:6‡discuss.streamlit.io](https://discuss.streamlit.io/t/how-to-upload-a-pdf-file-in-streamlit/2428#:~:text=import%20streamlit%20as%20st)
-
-# Prepare placeholders for extracted data
-extracted_data = {"Contract Number": "", "Client Name": "", "Date": "", "Cost": 0.0}
-
-if uploaded_file is not None:
-    # 2. Extract key information from the uploaded PDF contract
-    # Use PyPDF2 to read the PDF file from the uploaded file object
-    pdf_reader = PdfReader(uploaded_file)  # Read PDF content [oai_citation_attribution:7‡python.plainenglish.io](https://python.plainenglish.io/streamlit-extract-text-data-from-your-pdf-file-75201efaf9af#:~:text=if%20pdf%20is%20not%20None%3A,extract_text%28%29%E2%80%A6)
-    text_data = ""
-    for page in pdf_reader.pages:
-        text_data += page.extract_text()  # Concatenate text from all pages
-
-    # Parse the text to find key fields. This assumes the PDF contains identifiable labels.
-    # **Note:** If your contract PDF has different structure or keywords, adjust the patterns below.
-    contract_no_match = re.search(r"Contract Number:\s*([^\n\r]+)", text_data, flags=re.IGNORECASE)
-    client_match = re.search(r"Client Name:\s*([^\n\r]+)", text_data, flags=re.IGNORECASE)
-    date_match = re.search(r"Date:\s*([^\n\r]+)", text_data, flags=re.IGNORECASE)
-    cost_match = re.search(r"Cost:\s*([^\n\r]+)", text_data, flags=re.IGNORECASE)
-    # Extract the values if patterns were found, else keep as empty/default
-    if contract_no_match:
-        extracted_data["Contract Number"] = contract_no_match.group(1).strip()
-    if client_match:
-        extracted_data["Client Name"] = client_match.group(1).strip()
-    if date_match:
-        extracted_data["Date"] = client_match.group(1).strip()
-    if cost_match:
-        # Remove any currency symbols or commas, then convert to float
-        cost_str = cost_match.group(1).strip()
-        cost_num = re.sub(r'[^\d\.]', '', cost_str)
-        try:
-            extracted_data["Cost"] = float(cost_num)
-        except:
-            extracted_data["Cost"] = cost_str  # If not a standard number, keep raw string
-
-    # Display the extracted data for user confirmation/edits
-    st.subheader("Extracted Contract Details")
-    st.write("Below are the details extracted from the uploaded contract. You may edit any field if needed before saving:")
-else:
-    st.write("Upload a contract PDF to extract and manage its details, or manually enter contract information below.")
-
-# 3. Load existing contract data from Excel (or create new DataFrame if not exists)
-EXCEL_FILE = "contracts_data.xlsx"
-try:
-    # Load existing data
-    df_contracts = pd.read_excel(EXCEL_FILE)
-except FileNotFoundError:
-    # Create a new DataFrame if file doesn't exist
-    df_contracts = pd.DataFrame(columns=["Contract Number", "Client Name", "Date", "Cost", "Version"])
-# Ensure DataFrame has the expected columns (if Excel had no Version column, add it)
-if "Version" not in df_contracts.columns:
-    df_contracts["Version"] = 1
-
-# 4. Interactive form for contract data (extracted or manual)
-with st.form(key="contract_form"):
-    # If a PDF was uploaded and parsed, use those values as initial defaults; otherwise use empty/defaults
-    contract_num = st.text_input("Contract Number", value=extracted_data["Contract Number"])
-    client_name = st.text_input("Client Name", value=extracted_data["Client Name"])
-    # For date, if extracted data is present and looks like a date, we can default to that.
-    # Otherwise default to empty or current date.
-    date_input = st.text_input("Date", value=extracted_data["Date"])
-    cost_input = st.text_input("Contract Cost", value=str(extracted_data["Cost"] if extracted_data["Cost"] != 0.0 else ""))
-
-    # Optionally, allow selecting an existing contract to update (adds a new version)
-    existing_contracts = df_contracts["Contract Number"].unique().tolist()
-    edit_choice = st.selectbox("Edit existing contract (select one to update or choose 'None' for new)", options=["None"] + existing_contracts)
-    if edit_choice != "None":
-        # If an existing contract is chosen, prefill the form with its latest data
-        prev_entries = df_contracts[df_contracts["Contract Number"] == edit_choice]
-        if not prev_entries.empty:
-            latest_entry = prev_entries.iloc[-1]  # take the last entry for that contract
-            contract_num = st.text_input("Contract Number", value=latest_entry["Contract Number"], key="edit_contract_num")
-            client_name = st.text_input("Client Name", value=latest_entry["Client Name"], key="edit_client_name")
-            date_input = st.text_input("Date", value=str(latest_entry["Date"]), key="edit_date")
-            cost_input = st.text_input("Contract Cost", value=str(latest_entry["Cost"]), key="edit_cost")
-
-    # Submit button for the form
-    submit_btn = st.form_submit_button(label="Save Contract Data")
-
-# When the form is submitted, process the input data
-if submit_btn:
-    # Use form inputs (the state variables) for saving
-    # (They may be updated from initial extracted_data or manual input or edit selection)
-    contract_num_val = contract_num.strip()
-    client_name_val = client_name.strip()
-    date_val = date_input.strip()
-    # Convert cost to numeric if possible
-    try:
-        cost_val = float(re.sub(r'[^\d\.]', '', cost_input))
-    except:
-        cost_val = cost_input  # keep as string if it couldn't be parsed to float
-
-    # Determine version number: if this contract number exists, increment version, else start at 1
-    if contract_num_val in df_contracts["Contract Number"].values:
-        prev_versions = df_contracts[df_contracts["Contract Number"] == contract_num_val]["Version"]
-        new_version = prev_versions.max() + 1
-    else:
-        new_version = 1
-
-    # Create a new record (dictionary) for the contract
-    new_record = {
-        "Contract Number": contract_num_val,
-        "Client Name": client_name_val,
-        "Date": date_val,
-        "Cost": cost_val,
-        "Version": new_version
-    }
-
-    # Append the new record to the DataFrame (preserving old records for history)
-    df_contracts = pd.concat([df_contracts, pd.DataFrame([new_record])], ignore_index=True)
-
-    # Save back to Excel file (overwriting with updated DataFrame). This keeps all versions in the file.
-    try:
-        df_contracts.to_excel(EXCEL_FILE, index=False)
-        st.success(f"Contract data saved to {EXCEL_FILE}. (Contract #{contract_num_val}, Version {new_version})")
-    except Exception as e:
-        st.error(f"Error saving data to Excel: {e}")
-
-# 5. Display the table of contracts with all history
-st.header("Contract Records (History)")
-if df_contracts.empty:
-    st.info("No contract records available yet.")
-else:
-    st.dataframe(df_contracts)  # Show the full table of contracts and versions
-    st.caption("All contract entries (including multiple versions if updated).")
-
-# 6. Display statistics and charts
-st.header("Contract Statistics")
-if df_contracts.empty:
-    st.write("No data to display statistics.")
-else:
-    total_contracts = df_contracts["Contract Number"].nunique()  # count unique contracts
-    total_entries = len(df_contracts)  # total entries (including versions)
-    total_cost = df_contracts["Cost"].apply(pd.to_numeric, errors='coerce').sum()  # sum of costs (numeric)
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Contracts (unique)", total_contracts)
-    col2.metric("Total Entries (incl. versions)", total_entries)
-    col3.metric("Total Cost", f"${total_cost:,.2f}")
-    # Bar chart of total cost by client for visualization
-    cost_by_client = df_contracts.groupby("Client Name")["Cost"].apply(pd.to_numeric, errors='coerce').sum().reset_index()
-    if not cost_by_client.empty:
-        st.subheader("Total Cost by Client")
-        st.bar_chart(cost_by_client.set_index("Client Name"))  # uses client names as X-axis and cost as Y [oai_citation_attribution:8‡docs.streamlit.io](https://docs.streamlit.io/develop/api-reference/charts/st.bar_chart#:~:text=This%20is%20syntax,scenarios%2C%20while%20being%20less%20customizable)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-import os
-import re
-import pandas as pd
-import PyPDF2
-import streamlit as st
-import matplotlib.pyplot as plt
-from datetime import datetime
-
-# File path for storing contract data
-EXCEL_FILE = "contract_data.xlsx"
-VERSION_FOLDER = "versions"
-
-# Ensure version folder exists
-os.makedirs(VERSION_FOLDER, exist_ok=True)
-
-# Function to extract data from PDF (Modify regex patterns to match your contract format)
-def extract_contract_data(pdf_file_path):
-    with open(pdf_file_path, "rb") as file:
-        reader = PyPDF2.PdfReader(file)
-        text = "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
-
-        # Extract contract number, client name, date, and cost using regex (adjust as needed)
-        contract_number = re.search(r"Contract Number:\s*(\S+)", text)
-        client_name = re.search(r"Client Name:\s*(.+)", text)
-        date = re.search(r"Date:\s*(\d{2}/\d{2}/\d{4})", text)
-        cost = re.search(r"Cost:\s*\$([\d,]+\.?\d*)", text)
-
-        return {
-            "Contract Number": contract_number.group(1) if contract_number else "N/A",
-            "Client Name": client_name.group(1) if client_name else "N/A",
-            "Date": date.group(1) if date else "N/A",
-            "Cost": float(cost.group(1).replace(",", "")) if cost else 0.0
-        }
-
-# Function to save data to Excel with versioning
-def save_to_excel(new_data):
-    if os.path.exists(EXCEL_FILE):
-        df = pd.read_excel(EXCEL_FILE)
-    else:
-        df = pd.DataFrame(columns=["Contract Number", "Client Name", "Date", "Cost"])
-
-    # Append new data
-    df = df.append(new_data, ignore_index=True)
-
-    # Save versioned file
-    versioned_file = os.path.join(VERSION_FOLDER, f"contract_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
-    df.to_excel(versioned_file, index=False)
-    
-    # Save main file
-    df.to_excel(EXCEL_FILE, index=False)
-    
-    return df
-
-
-# Streamlit Frontend
-st.title("Contract Data Extraction Dashboard")
-
-# File uploader
-uploaded_file = st.file_uploader("Upload a contract PDF", type=["pdf"])
-
-if uploaded_file:
-    # Save uploaded file temporarily
-    temp_pdf_path = "temp_contract.pdf"
-    with open(temp_pdf_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-
-    # Extract data from PDF
-    extracted_data = extract_contract_data(temp_pdf_path)
-
-    # Show extracted data
-    st.write("Extracted Data:")
-    st.write(extracted_data)
-
-    # Save data to Excel
-    if st.button("Save to Database"):
-        df = save_to_excel(extracted_data)
-        st.success("Data saved successfully!")
-
-# Load data from existing Excel file
-if os.path.exists(EXCEL_FILE):
-    df = pd.read_excel(EXCEL_FILE)
-    st.write("Current Contract Database:")
-    st.dataframe(df)
-
-    # Editable table
-    edited_df = st.experimental_data_editor(df)
-    
-    if st.button("Update Database"):
-        edited_df.to_excel(EXCEL_FILE, index=False)
-        st.success("Database updated successfully!")
-
-    # Display statistics
-    total_contracts = df.shape[0]
-    total_cost = df["Cost"].sum()
-
-    st.write(f"**Total Contracts:** {total_contracts}")
-    st.write(f"**Total Cost:** ${total_cost:,.2f}")
-
-    # Plot cost distribution
-    fig, ax = plt.subplots()
-    df.groupby("Client Name")["Cost"].sum().plot(kind="bar", ax=ax)
-    ax.set_title("Total Cost per Client")
-    ax.set_ylabel("Cost ($)")
-    st.pyplot(fig)
-
 import os
 import re
 import pandas as pd
@@ -282,445 +6,148 @@ import matplotlib.pyplot as plt
 from PyPDF2 import PdfReader
 from datetime import datetime
 
-# File paths for storing extracted data
+# Constants
 EXCEL_FILE = "contract_data.xlsx"
 VERSION_FOLDER = "versions"
-
-# Ensure version folder exists
 os.makedirs(VERSION_FOLDER, exist_ok=True)
-
-# Function to extract ITEM NO, QUANTITY, UNIT PRICE, and AMOUNT from each page of the PDF
-def extract_contract_data(pdf_file_path):
-    with open(pdf_file_path, "rb") as file:
-        reader = PdfReader(file)
-        extracted_data = []
-
-        # Read through each page of the PDF
-        for page in reader.pages:
-            text_lines = page.extract_text().split("\n") if page.extract_text() else []
-            
-            # Loop through each line to find relevant fields
-            for i, line in enumerate(text_lines):
-                if "ITEM NO" in line.upper():
-                    item_no = text_lines[i + 1].strip() if i + 1 < len(text_lines) else "N/A"
-                elif "QUANTITY" in line.upper():
-                    quantity = text_lines[i + 1].strip() if i + 1 < len(text_lines) else "N/A"
-                elif "UNIT PRICE" in line.upper():
-                    unit_price = text_lines[i + 1].strip() if i + 1 < len(text_lines) else "N/A"
-                elif "AMOUNT" in line.upper():
-                    amount = text_lines[i + 1].strip() if i + 1 < len(text_lines) else "N/A"
-                    
-                    # Convert numbers to proper format
-                    item_no = item_no if item_no != "N/A" else ""
-                    quantity = re.sub(r"[^\d.]", "", quantity) if quantity != "N/A" else "0"
-                    unit_price = re.sub(r"[^\d.]", "", unit_price) if unit_price != "N/A" else "0.0"
-                    amount = re.sub(r"[^\d.]", "", amount) if amount != "N/A" else "0.0"
-                    
-                    # Try to convert to appropriate data types
-                    try:
-                        quantity = int(quantity)
-                    except ValueError:
-                        quantity = 0
-                    try:
-                        unit_price = float(unit_price)
-                    except ValueError:
-                        unit_price = 0.0
-                    try:
-                        amount = float(amount)
-                    except ValueError:
-                        amount = 0.0
-
-                    # Store extracted values in a dictionary
-                    extracted_data.append({
-                        "Item No": item_no,
-                        "Quantity": quantity,
-                        "Unit Price": unit_price,
-                        "Amount": amount
-                    })
-
-    return extracted_data
-
-# Function to save extracted data to Excel
-def save_to_excel(new_data):
-    if os.path.exists(EXCEL_FILE):
-        df = pd.read_excel(EXCEL_FILE)
-    else:
-        df = pd.DataFrame(columns=["Item No", "Quantity", "Unit Price", "Amount"])
-
-    # Append new data
-    df = pd.concat([df, pd.DataFrame(new_data)], ignore_index=True)
-
-    # Save versioned file
-    versioned_file = os.path.join(VERSION_FOLDER, f"contract_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
-    df.to_excel(versioned_file, index=False)
-    
-    # Save main file
-    df.to_excel(EXCEL_FILE, index=False)
-    
-    return df
-
-# Streamlit Dashboard
-st.title("Contract Data Extraction Dashboard")
-
-# File uploader
-uploaded_file = st.file_uploader("Upload a contract PDF", type=["pdf"])
-
-if uploaded_file:
-    # Save uploaded file temporarily
-    temp_pdf_path = "temp_contract.pdf"
-    with open(temp_pdf_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-
-    # Extract data from PDF
-    extracted_data = extract_contract_data(temp_pdf_path)
-
-    # Show extracted data
-    if extracted_data:
-        st.subheader("Extracted Contract Data")
-        st.dataframe(pd.DataFrame(extracted_data))
-
-        # Save data to Excel
-        if st.button("Save to Database"):
-            df = save_to_excel(extracted_data)
-            st.success("Data saved successfully!")
-    else:
-        st.error("No valid contract data found in the PDF.")
-
-# Load existing data if available
-if os.path.exists(EXCEL_FILE):
-    df = pd.read_excel(EXCEL_FILE)
-    st.subheader("Current Contract Database")
-    st.dataframe(df)
-
-    # Editable table
-    edited_df = st.experimental_data_editor(df)
-
-    if st.button("Update Database"):
-        edited_df.to_excel(EXCEL_FILE, index=False)
-        st.success("Database updated successfully!")
-
-    # Display statistics
-    total_items = df.shape[0]
-    total_amount = df["Amount"].sum()
-
-    st.write(f"**Total Items:** {total_items}")
-    st.write(f"**Total Amount:** ${total_amount:,.2f}")
-
-    # Plot amount distribution by item
-    fig, ax = plt.subplots()
-    df.groupby("Item No")["Amount"].sum().plot(kind="bar", ax=ax)
-    ax.set_title("Total Amount per Item")
-    ax.set_ylabel("Amount ($)")
-    st.pyplot(fig)
-
-
-
-
-
-
-import os
-import re
-import pandas as pd
-import streamlit as st
-import matplotlib.pyplot as plt
-from PyPDF2 import PdfReader
-from datetime import datetime
-
-# File paths for storing extracted data
-EXCEL_FILE = "contract_data.xlsx"
-VERSION_FOLDER = "versions"
-
-# Ensure version folder exists
-os.makedirs(VERSION_FOLDER, exist_ok=True)
-
-# Function to extract ITEM NO, QUANTITY, UNIT PRICE, and AMOUNT from each page of the PDF
-def extract_contract_data(pdf_file_path):
-    with open(pdf_file_path, "rb") as file:
-        reader = PdfReader(file)
-        extracted_data = []
-
-        # Read through each page of the PDF
-        for page in reader.pages:
-            text_lines = page.extract_text().split("\n") if page.extract_text() else []
-            
-            # Initialize default values
-            item_no, quantity, unit_price, amount = "N/A", 0, 0.0, 0.0
-            
-            # Loop through each line to find relevant fields
-            for i, line in enumerate(text_lines):
-                if "ITEM NO" in line.upper():
-                    item_no = text_lines[i + 1].strip() if i + 1 < len(text_lines) else "N/A"
-                elif "QUANTITY" in line.upper():
-                    quantity = text_lines[i + 1].strip() if i + 1 < len(text_lines) else "0"
-                elif "UNIT PRICE" in line.upper():
-                    unit_price = text_lines[i + 1].strip() if i + 1 < len(text_lines) else "0.0"
-                elif "AMOUNT" in line.upper():
-                    amount = text_lines[i + 1].strip() if i + 1 < len(text_lines) else "0.0"
-                    
-                    # Ensure values are formatted properly
-                    item_no = item_no if item_no != "N/A" else ""
-                    quantity = re.sub(r"[^\d.]", "", quantity) if quantity != "N/A" else "0"
-                    unit_price = re.sub(r"[^\d.]", "", unit_price) if unit_price != "N/A" else "0.0"
-                    amount = re.sub(r"[^\d.]", "", amount) if amount != "N/A" else "0.0"
-                    
-                    # Convert extracted numbers to proper data types
-                    try:
-                        quantity = int(quantity)
-                    except ValueError:
-                        quantity = 0
-                    try:
-                        unit_price = float(unit_price)
-                    except ValueError:
-                        unit_price = 0.0
-                    try:
-                        amount = float(amount)
-                    except ValueError:
-                        amount = 0.0
-
-                    # Append extracted data only when "AMOUNT" is found (ensures complete rows)
-                    extracted_data.append({
-                        "Item No": item_no,
-                        "Quantity": quantity,
-                        "Unit Price": unit_price,
-                        "Amount": amount
-                    })
-
-    return extracted_data
-
-# Function to save extracted data to Excel
-def save_to_excel(new_data):
-    if os.path.exists(EXCEL_FILE):
-        df = pd.read_excel(EXCEL_FILE)
-    else:
-        df = pd.DataFrame(columns=["Item No", "Quantity", "Unit Price", "Amount"])
-
-    # Append new data
-    df = pd.concat([df, pd.DataFrame(new_data)], ignore_index=True)
-
-    # Save versioned file
-    versioned_file = os.path.join(VERSION_FOLDER, f"contract_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
-    df.to_excel(versioned_file, index=False)
-    
-    # Save main file
-    df.to_excel(EXCEL_FILE, index=False)
-    
-    return df
-
-# Streamlit Dashboard
-st.title("Contract Data Extraction Dashboard")
-
-# File uploader
-uploaded_file = st.file_uploader("Upload a contract PDF", type=["pdf"])
-
-if uploaded_file:
-    # Save uploaded file temporarily
-    temp_pdf_path = "temp_contract.pdf"
-    with open(temp_pdf_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-
-    # Extract data from PDF
-    extracted_data = extract_contract_data(temp_pdf_path)
-
-    # Show extracted data
-    if extracted_data:
-        st.subheader("Extracted Contract Data")
-        st.dataframe(pd.DataFrame(extracted_data))
-
-        # Save data to Excel
-        if st.button("Save to Database"):
-            df = save_to_excel(extracted_data)
-            st.success("Data saved successfully!")
-    else:
-        st.error("No valid contract data found in the PDF.")
-
-# Load existing data if available
-if os.path.exists(EXCEL_FILE):
-    df = pd.read_excel(EXCEL_FILE)
-    st.subheader("Current Contract Database")
-    st.dataframe(df)
-
-    # Editable table
-    edited_df = st.data_editor(df)  # Updated to use st.data_editor
-
-    if st.button("Update Database"):
-        edited_df.to_excel(EXCEL_FILE, index=False)
-        st.success("Database updated successfully!")
-
-    # Display statistics
-    total_items = df.shape[0]
-    total_amount = df["Amount"].sum()
-
-    st.write(f"**Total Items:** {total_items}")
-    st.write(f"**Total Amount:** ${total_amount:,.2f}")
-
-    # Plot amount distribution by item
-    fig, ax = plt.subplots()
-    df.groupby("Item No")["Amount"].sum().plot(kind="bar", ax=ax)
-    ax.set_title("Total Amount per Item")
-    ax.set_ylabel("Amount ($)")
-    st.pyplot(fig)
-
-
-
-
-
-
-import os
-import re
-import pandas as pd
-import streamlit as st
-import matplotlib.pyplot as plt
-from PyPDF2 import PdfReader
-from datetime import datetime
-
-# File paths for storing extracted data
-EXCEL_FILE = "contract_data.xlsx"
-VERSION_FOLDER = "versions"
-
-# Ensure version folder exists
-os.makedirs(VERSION_FOLDER, exist_ok=True)
-
-# Expected column structure
 expected_columns = ["Item No", "Quantity", "Unit Price", "Amount"]
 
-# Function to extract ITEM NO, QUANTITY, UNIT PRICE, and AMOUNT from each page of the PDF
+# PDF extraction function
 def extract_contract_data(pdf_file_path):
+    extracted_data = []
+
     with open(pdf_file_path, "rb") as file:
         reader = PdfReader(file)
-        extracted_data = []
 
-        # Read through each page of the PDF
         for page in reader.pages:
             text_lines = page.extract_text().split("\n") if page.extract_text() else []
-            
-            # Initialize default values
-            item_no, quantity, unit_price, amount = "N/A", 0, 0.0, 0.0
-            
-            # Loop through each line to find relevant fields
+
+            # Initialize temp variables
+            item_no, quantity, unit_price, amount = None, None, None, None
+
             for i, line in enumerate(text_lines):
-                if "ITEM NO" in line.upper():
-                    item_no = text_lines[i + 1].strip() if i + 1 < len(text_lines) else "N/A"
+                line_upper = line.strip().upper()
+
+                if "ITEM NO" in line.upper() and i + 1 < len(text_lines):
+                    item_no = text_lines[i + 1].strip()
+
                 elif "QUANTITY" in line.upper():
                     quantity = text_lines[i + 1].strip() if i + 1 < len(text_lines) else "0"
+
                 elif "UNIT PRICE" in line.upper():
                     unit_price = text_lines[i + 1].strip() if i + 1 < len(text_lines) else "0.0"
+
                 elif "AMOUNT" in line.upper():
                     amount = text_lines[i + 1].strip() if i + 1 < len(text_lines) else "0.0"
-                    
-                    # Ensure values are formatted properly
-                    item_no = item_no if item_no != "N/A" else ""
-                    quantity = re.sub(r"[^\d.]", "", quantity) if quantity != "N/A" else "0"
-                    unit_price = re.sub(r"[^\d.]", "", unit_price) if unit_price != "N/A" else "0.0"
-                    amount = re.sub(r"[^\d.]", "", amount) if amount != "N/A" else "0.0"
-                    
-                    # Convert extracted numbers to proper data types
-                    try:
-                        quantity = int(quantity)
-                    except ValueError:
-                        quantity = 0
-                    try:
-                        unit_price = float(unit_price)
-                    except ValueError:
-                        unit_price = 0.0
-                    try:
-                        amount = float(amount)
-                    except ValueError:
-                        amount = 0.0
 
-                    # Append extracted data only when "AMOUNT" is found (ensures complete rows)
-                    extracted_data.append({
-                        "Item No": item_no,
-                        "Quantity": quantity,
-                        "Unit Price": unit_price,
-                        "Amount": amount
-                    })
+                    # Clean and convert data safely
+                    def safe_convert(val, dtype=float):
+                        if isinstance(val := val_cleanup(val=val), (float, int)):
+                            return val
+                        try:
+                            return dtype(val)
+                        except:
+                            return default
+
+                    item_no_clean = item_no if item_no else "N/A"
+                    quantity_clean = re.sub(r"[^\d.]", "", str(quantity)) if quantity else "0"
+                    unit_price_clean = re.sub(r"[^\d.]", "", str(unit_price)) if unit_price else "0.0"
+                    amount_clean = re.sub(r"[^\d.]", "", str(amount)) if amount else "0.0"
+
+                    # Convert values
+                    try:
+                        quantity_clean = int(quantity_clean)
+                    except:
+                        quantity_clean = 0
+
+                    try:
+                        unit_price_clean = float(unit_price_clean)
+                    except:
+                        unit_price_clean = 0.0
+
+                    try:
+                        amount_clean = float(amount_clean)
+                    except:
+                        amount_clean = 0.0
+
+                    extracted_row = {
+                        "Item No": item_no_clean,
+                        "Quantity": quantity_clean,
+                        "Unit Price": unit_price_clean,
+                        "Amount": amount_clean
+                    }
+
+                    extracted_data.append(extracted_row)
+
+                    # Reset for next item
+                    item_no, quantity, unit_price, amount = None, None, None, None
 
     return extracted_data
 
-# Function to save extracted data to Excel
-def save_to_excel(new_data):
+# Save data to Excel with versioning
+def save_to_excel(data):
     if os.path.exists(EXCEL_FILE):
-        df = pd.read_excel(EXCEL_FILE)
-
-        # Ensure the DataFrame contains the correct columns
-        for col in expected_columns:
-            if col not in df.columns:
-                df[col] = None  # Add missing columns if needed
-
+        df_existing = pd.read_excel(EXCEL_FILE)
     else:
-        df = pd.DataFrame(columns=expected_columns)
+        df_existing = pd.DataFrame(columns=["Item No", "Quantity", "Unit Price", "Amount"])
 
-    # Append new data
-    df = pd.concat([df, pd.DataFrame(new_data)], ignore_index=True)
+    df_new = pd.DataFrame(data)
+    df_final = pd.concat([df_existing, df_new], ignore_index=True)
 
-    # Ensure correct data types
-    df = df.astype({"Quantity": "int", "Unit Price": "float", "Amount": "float"}, errors="ignore")
+    versioned_file = f"{VERSION_FOLDER}/contracts_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    df_existing.to_excel(versioned_file, index=False)
+    df_existing.to_excel(EXCEL_FILE, index=False)
 
-    # Save versioned file
-    versioned_file = os.path.join(VERSION_FOLDER, f"contract_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
-    df.to_excel(versioned_file, index=False)
-    
-    # Save main file
-    df.to_excel(EXCEL_FILE, index=False)
-    
-    return df
+    return df_existing
 
 # Streamlit Dashboard
 st.title("Contract Data Extraction Dashboard")
 
-# File uploader
-uploaded_file = st.file_uploader("Upload a contract PDF", type=["pdf"])
+uploaded_file = st.file_uploader("Upload Contract PDF", type="pdf")
 
 if uploaded_file:
-    # Save uploaded file temporarily
-    temp_pdf_path = "temp_contract.pdf"
-    with open(temp_pdf_path, "wb") as f:
+    temp_pdf = "uploaded_contract.pdf"
+    with open(temp_pdf, "wb") as f:
         f.write(uploaded_file.getbuffer())
 
-    # Extract data from PDF
-    extracted_data = extract_contract_data(temp_pdf_path)
+    extracted_data = extract_contract_data(temp_pdf)
 
-    # Show extracted data
     if extracted_data:
-        st.subheader("Extracted Contract Data")
-        st.dataframe(pd.DataFrame(extracted_data))
+        st.subheader("Extracted Data")
+        st.dataframe(extracted_data)
 
-        # Save data to Excel
-        if st.button("Save to Database"):
-            df = save_to_excel(extracted_data)
-            st.success("Data saved successfully!")
-    else:
-        st.error("No valid contract data found in the PDF.")
+        if st.button("Save to Excel"):
+            df_contracts = save_to_excel(extracted_data)
+            st.success("Contract data saved successfully!")
+else:
+    st.info("Please upload a PDF file to extract data.")
 
-# Load existing data if available
+# Load existing data
 if os.path.exists(EXCEL_FILE):
-    df = pd.read_excel(EXCEL_FILE)
-
-    # Ensure the DataFrame contains the correct columns
-    for col in expected_columns:
-        if col not in df.columns:
-            df[col] = None
-
+    df_existing = pd.read_excel(EXCEL_FILE)
     st.subheader("Current Contract Database")
-    st.dataframe(df)
-
-    # Editable table
-    edited_df = st.data_editor(df)  # Updated to use st.data_editor
+    edited_df = st.data_editor(df_existing)
 
     if st.button("Update Database"):
+        edited_df = edited_df.astype({
+            "Quantity": int, "Unit Price": float, "Amount": float
+        }, errors='ignore')
         edited_df.to_excel(EXCEL_FILE, index=False)
         st.success("Database updated successfully!")
 
-    # Display statistics
-    total_items = df.shape[0]
-    total_amount = df["Amount"].sum() if "Amount" in df.columns else 0
+    # Statistics
+    total_items = len(df_existing)
+    total_amount = df_existing["Amount"].sum()
 
     st.write(f"**Total Items:** {total_items}")
     st.write(f"**Total Amount:** ${total_amount:,.2f}")
 
-    # Plot amount distribution by item
+    # Visualization
     fig, ax = plt.subplots()
-    df.groupby("Item No")["Amount"].sum().plot(kind="bar", ax=ax)
-    ax.set_title("Total Amount per Item")
+    df_existing.groupby("Item No")["Amount"].sum().plot(kind="bar", ax=ax)
+    ax.set_title("Total Amount per Item No")
     ax.set_ylabel("Amount ($)")
+    ax.set_xlabel("Item No")
     st.pyplot(fig)
+else:
+    st.info("No existing contract database found.")
