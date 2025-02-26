@@ -98,3 +98,70 @@ if uploaded_file is not None:
         st.success(f"✅ Successfully extracted {len(extracted_paragraphs)} paragraphs containing the keywords.")
     else:
         st.warning("⚠ No paragraphs found containing the specified keywords.")
+
+
+
+
+
+
+
+
+import streamlit as st
+import pandas as pd
+import pdfplumber
+import io
+
+# Function to extract text from PDF
+def extract_text_from_pdf(uploaded_file):
+    text_data = ""
+    with pdfplumber.open(uploaded_file) as pdf:
+        for page in pdf.pages:
+            text_data += page.extract_text() + "\n"
+    return text_data
+
+# Function to parse structured data
+def parse_pdf_text(text):
+    keywords = ["ITEM NO", "QUANTITY", "UNIT PRICE", "AMOUNT"]
+    data = []
+    lines = text.splitlines()
+    
+    i = 0
+    while i < len(lines):
+        if lines[i].strip().upper() == "ITEM NO":
+            record = {"ITEM NO": "N/A", "QUANTITY": "N/A", "UNIT PRICE": "N/A", "AMOUNT": "N/A"}
+            
+            for key in keywords:
+                if i < len(lines) and lines[i].strip().upper() == key:
+                    value = lines[i + 1].strip() if i + 1 < len(lines) else "N/A"
+                    record[key] = value
+                    i += 2  # Move to the next expected keyword
+                
+            data.append(record)
+        else:
+            i += 1  # Move to the next line
+    
+    return pd.DataFrame(data)
+
+# Function to convert DataFrame to Excel
+def create_excel_file(dataframe):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        dataframe.to_excel(writer, index=False, sheet_name="Extracted Data")
+    return output.getvalue()
+
+# Streamlit App
+st.title("PDF Data Extractor")
+
+uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
+
+if uploaded_file is not None:
+    text = extract_text_from_pdf(uploaded_file)
+    df = parse_pdf_text(text)
+    excel_data = create_excel_file(df)
+    
+    st.download_button(
+        label="📥 Download Extracted Data",
+        data=excel_data,
+        file_name="extracted_data.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
