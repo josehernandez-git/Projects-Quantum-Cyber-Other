@@ -1,167 +1,70 @@
-import streamlit as st
-import fitz  # PyMuPDF for PDF reading
+import fitz  # PyMuPDF
 import pandas as pd
-import re
-from io import BytesIO
 
-# Title of the app
-st.title("PDF Keyword Paragraph Extractor")
 
-# File uploader accepts PDF files
-uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
+# Function to extract text from a PDF
+def extract_text_from_pdf(pdf_path):
+    doc = fitz.open(pdf_path)
+    all_text = []
 
-if uploaded_file is not None:
-    # Read file into bytes and open with PyMuPDF
-    pdf_bytes = uploaded_file.getvalue()
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    
-    # Extract all text from the PDF
-    full_text = ""
     for page in doc:
-        full_text += page.get_text() + "\n"
+        text = page.get_text("text")
+        all_text.extend(text.split("\n"))  # Store each line separately
 
-    # Define target keywords (case-insensitive search)
-    keywords = ["ITEM NO", "QUANTITY", "UNIT PRICE", "AMOUNT"]
-    keywords_lower = [kw.lower() for kw in keywords]
-    
-    # Split text into lines to identify paragraphs
-    lines = full_text.splitlines()
-    extracted_paragraphs = []  # List to hold paragraphs containing keywords
-    
-    current_paragraph = []
-    blank_count = 0  # Ensure blank_count is always an integer
-
-    for line in lines:
-        if line.strip() == "":  # Detect blank lines
-            blank_count += 1
-            if blank_count >= 3:
-                break  # Stop extraction after three consecutive blank lines
-
-            if current_paragraph:
-                # Join current collected lines into a paragraph
-                paragraph_text = "\n".join(current_paragraph).strip()
-                # Check if any keyword is in this paragraph
-                if any(kw in paragraph_text.lower() for kw in keywords_lower):
-                    extracted_paragraphs.append(paragraph_text)
-                # Reset for next paragraph
-                current_paragraph = []
-        else:
-            blank_count = 0  # Reset count if a non-empty line is found
-            current_paragraph.append(line)  # Add to current paragraph
-
-    # Handle the last paragraph if the file didn't end with 3 blanks
-    if current_paragraph:
-        paragraph_text = "\n".join(current_paragraph).strip()
-        if any(kw in paragraph_text.lower() for kw in keywords_lower):
-            extracted_paragraphs.append(paragraph_text)
-
-    # If any paragraphs were extracted, create an Excel file
-    if extracted_paragraphs:
-        # Create a DataFrame
-        df = pd.DataFrame({"Extracted Section": extracted_paragraphs})
-
-        # Convert numerical fields safely
-        def safe_convert(value, dtype=float):
-            """ Safely convert values to numeric types to avoid errors """
-            try:
-                return dtype(re.sub(r"[^\d.]", "", value)) if isinstance(value, str) else dtype(value)
-            except ValueError:
-                return 0
-
-        # Apply safe conversion to numeric columns if needed
-        if "Quantity" in df.columns:
-            df["Quantity"] = df["Quantity"].apply(lambda x: safe_convert(x, int))
-        if "Unit Price" in df.columns:
-            df["Unit Price"] = df["Unit Price"].apply(lambda x: safe_convert(x, float))
-        if "Amount" in df.columns:
-            df["Amount"] = df["Amount"].apply(lambda x: safe_convert(x, float))
-
-        # Save the extracted data to an in-memory Excel file
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df.to_excel(writer, index=False, sheet_name='Extracted')
-            # Apply text wrap format for readability
-            workbook = writer.book
-            worksheet = writer.sheets['Extracted']
-            wrap_format = workbook.add_format({'text_wrap': True})
-            worksheet.set_column(0, 0, 60, wrap_format)  # 60 width for better visibility
-        excel_data = output.getvalue()  # Get the binary content of the Excel file
-
-        # Provide a download button for the Excel file
-        st.download_button(
-            label="📥 Download Extracted Data",
-            data=excel_data,
-            file_name="extracted_paragraphs.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
-        st.success(f"✅ Successfully extracted {len(extracted_paragraphs)} paragraphs containing the keywords.")
-    else:
-        st.warning("⚠ No paragraphs found containing the specified keywords.")
+    return all_text
 
 
-
-
-
-
-
-
-import streamlit as st
-import pandas as pd
-import pdfplumber
-import io
-
-# Function to extract text from PDF
-def extract_text_from_pdf(uploaded_file):
-    text_data = ""
-    with pdfplumber.open(uploaded_file) as pdf:
-        for page in pdf.pages:
-            text_data += page.extract_text() + "\n"
-    return text_data
-
-# Function to parse structured data
-def parse_pdf_text(text):
-    keywords = ["ITEM NO", "QUANTITY", "UNIT PRICE", "AMOUNT"]
-    data = []
-    lines = text.splitlines()
-    
+# Function to extract structured data dynamically
+def extract_and_clean_data(text_lines):
+    structured_data = []
     i = 0
-    while i < len(lines):
-        if lines[i].strip().upper() == "ITEM NO":
-            record = {"ITEM NO": "N/A", "QUANTITY": "N/A", "UNIT PRICE": "N/A", "AMOUNT": "N/A"}
-            
-            for key in keywords:
-                if i < len(lines) and lines[i].strip().upper() == key:
-                    value = lines[i + 1].strip() if i + 1 < len(lines) else "N/A"
-                    record[key] = value
-                    i += 2  # Move to the next expected keyword
-                
-            data.append(record)
+
+    while i < len(text_lines) - 4:  # Ensure there are enough lines to extract
+        if text_lines[i].strip() == "Fund" and text_lines[i + 1].strip() == "NAV":
+            # Extract next fund data
+            fund_name = text_lines[i + 4].strip()
+            nav = text_lines[i + 5].strip()
+            record_date = text_lines[i + 6].strip()
+            distributions = text_lines[i + 7].strip()
+
+            structured_data.append(
+                {"Fund": fund_name, "NAV": nav, "Record Date": record_date, "Distributions": distributions})
+
+            i += 8  # Move index forward to next set of data
         else:
-            i += 1  # Move to the next line
-    
-    return pd.DataFrame(data)
+            i += 1  # Keep searching if we haven't hit a "Fund" header
 
-# Function to convert DataFrame to Excel
-def create_excel_file(dataframe):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        dataframe.to_excel(writer, index=False, sheet_name="Extracted Data")
-    return output.getvalue()
+    return structured_data
 
-# Streamlit App
-st.title("PDF Data Extractor")
 
-uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
+# Function to export structured data to Excel
+def export_to_excel(structured_data, output_path="extracted_funds.xlsx"):
+    df = pd.DataFrame(structured_data)
 
-if uploaded_file is not None:
-    text = extract_text_from_pdf(uploaded_file)
-    df = parse_pdf_text(text)
-    excel_data = create_excel_file(df)
-    
-    st.download_button(
-        label="📥 Download Extracted Data",
-        data=excel_data,
-        file_name="extracted_data.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    if df.empty:
+        print("❌ No structured data found. Check extracted text formatting.")
+    else:
+        df.to_excel(output_path, index=False)
+        print(f"✅ Extracted data saved to {output_path}")
+
+
+# Main function
+def main():
+    pdf_path = "/Users/josedhernandez/Desktop/fake_capital_gains_final.pdf"  # Replace with actual PDF path
+
+    # Extract raw text
+    text_data = extract_text_from_pdf(pdf_path)
+
+    # Extract and clean the structured data
+    structured_data = extract_and_clean_data(text_data)
+
+    # Display the cleaned data
+    print("\n📊 Cleaned Extracted Data:\n", pd.DataFrame(structured_data))
+
+    # Export to Excel
+    export_to_excel(structured_data)
+
+
+# Run the program
+if __name__ == "__main__":
+    main()
