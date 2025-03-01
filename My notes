@@ -1,75 +1,3 @@
-import fitz  # PyMuPDF
-import pandas as pd
-
-
-# Function to extract text from a PDF
-def extract_text_from_pdf(pdf_path):
-    doc = fitz.open(pdf_path)
-    all_text = []
-
-    for page in doc:
-        text = page.get_text("text")
-        all_text.extend(text.split("\n"))  # Store each line separately
-
-    return all_text
-
-
-# Function to extract structured data dynamically
-def extract_and_clean_data(text_lines):
-    structured_data = []
-    i = 0
-
-    while i < len(text_lines) - 4:  # Ensure there are enough lines to extract
-        if text_lines[i].strip() == "Fund" and text_lines[i + 1].strip() == "NAV":
-            # Extract next fund data
-            fund_name = text_lines[i + 4].strip()
-            nav = text_lines[i + 5].strip()
-            record_date = text_lines[i + 6].strip()
-            distributions = text_lines[i + 7].strip()
-
-            structured_data.append(
-                {"Fund": fund_name, "NAV": nav, "Record Date": record_date, "Distributions": distributions})
-
-            i += 8  # Move index forward to next set of data
-        else:
-            i += 1  # Keep searching if we haven't hit a "Fund" header
-
-    return structured_data
-
-
-# Function to export structured data to Excel
-def export_to_excel(structured_data, output_path="extracted_funds.xlsx"):
-    df = pd.DataFrame(structured_data)
-
-    if df.empty:
-        print("❌ No structured data found. Check extracted text formatting.")
-    else:
-        df.to_excel(output_path, index=False)
-        print(f"✅ Extracted data saved to {output_path}")
-
-
-# Main function
-def main():
-    pdf_path = "/Users/josedhernandez/Desktop/fake_capital_gains_final.pdf"  # Replace with actual PDF path
-
-    # Extract raw text
-    text_data = extract_text_from_pdf(pdf_path)
-
-    # Extract and clean the structured data
-    structured_data = extract_and_clean_data(text_data)
-
-    # Display the cleaned data
-    print("\n📊 Cleaned Extracted Data:\n", pd.DataFrame(structured_data))
-
-    # Export to Excel
-    export_to_excel(structured_data)
-
-
-# Run the program
-if __name__ == "__main__":
-    main()
-
-
 
 
 
@@ -77,53 +5,76 @@ if __name__ == "__main__":
 import fitz  # PyMuPDF for PDF text extraction
 import pandas as pd
 import streamlit as st
-import streamlit.web.cli as stcli
-
-
-import os
+import re
 
 
 # Function to extract text from an uploaded PDF file
 def extract_text_from_pdf(uploaded_file):
     doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-    all_text = []
+    extracted_data = []
 
-    for page in doc:
+    for page_num, page in enumerate(doc):
         text = page.get_text("text")
-        all_text.extend(text.split("\n"))  # Store each line separately
+        lines = text.split("\n")
+        extracted_data.append((page_num + 1, lines))  # Store lines with page numbers
 
-    return all_text
+    return extracted_data
 
 
-# Function to extract structured data dynamically
-def extract_and_clean_data(text_lines, keywords):
+# Function to find values near keywords
+def find_values_near_keywords(text_data, search_terms):
     structured_data = []
-    i = 0
-    keyword_list = [kw.strip() for kw in keywords.split(",")]  # Convert user input into list
+    keyword_patterns = {term["word"]: re.compile(rf"\b{re.escape(term['word'])}\b", re.IGNORECASE) for term in
+                        search_terms}
 
-    while i < len(text_lines) - len(keyword_list):  # Ensure enough lines for extraction
-        if all(text_lines[i + j].strip() == keyword_list[j] for j in range(len(keyword_list))):
-            # Extract data from next line(s) assuming values appear below headers
-            values = [text_lines[i + len(keyword_list) + j].strip() for j in range(len(keyword_list))]
+    for page_num, lines in text_data:
+        extracted_info = {"Page": page_num}  # Initialize extracted fields for each page
 
-            if len(values) == len(keyword_list):
-                structured_data.append(dict(zip(keyword_list, values)))
+        for i, line in enumerate(lines):
+            for term in search_terms:
+                keyword = term["word"]
+                value_type = term["type"]
+                pattern = keyword_patterns[keyword]
 
-            i += len(keyword_list) + len(values)  # Move index forward
-        else:
-            i += 1  # Continue searching
+                if pattern.search(line):
+                    # Try to find value directly after keyword
+                    match = re.search(rf"{keyword}[:\s]+([\w\.\-/]+)", line, re.IGNORECASE)
+                    if match:
+                        extracted_info[keyword] = match.group(1)
+                    else:
+                        # If value not found inline, check the next 2 lines
+                        for offset in range(1, 3):
+                            if i + offset < len(lines):
+                                potential_value = lines[i + offset].strip()
+
+                                # Validate based on expected type
+                                if value_type == "Number" and re.match(r"^[\d\.\-/]+$", potential_value):
+                                    extracted_info[keyword] = potential_value
+                                    break
+                                elif value_type == "Name" and re.match(r"^[A-Za-z\s]+$", potential_value):
+                                    extracted_info[keyword] = potential_value
+                                    break
+
+        # Only add structured data if values were found
+        if any(key in extracted_info for key in keyword_patterns.keys()):
+            structured_data.append(extracted_info)
 
     return structured_data
 
 
-# Function to export structured data to Excel
-def export_to_excel(structured_data):
+# Function to process extracted data into a structured format
+def process_extracted_data(structured_data):
     df = pd.DataFrame(structured_data)
+    df.fillna("N/A", inplace=True)  # Fill missing values
+    return df
 
+
+# Function to export structured data to Excel
+def export_to_excel(df):
     if df.empty:
         return None
 
-    output_path = "extracted_data.xlsx"
+    output_path = "structured_extracted_data.xlsx"
     df.to_excel(output_path, index=False)
     return output_path
 
@@ -134,32 +85,34 @@ st.title("📄 PDF Data Extractor")
 # Upload PDF file
 uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
 
-# Text input for user-defined fields
-keywords = st.text_input("Enter keywords to extract (comma-separated)", "Fund, NAV, Record Date, Distributions")
+# User input for search terms
+st.subheader("🔍 Enter up to 10 search terms and specify value type")
+search_terms = []
+for i in range(10):
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        keyword = st.text_input(f"Keyword {i + 1} (Leave blank if not needed)", key=f"keyword_{i}")
+    with col2:
+        value_type = st.selectbox(f"Type {i + 1}", ["Number", "Name"], key=f"type_{i}")
 
-if uploaded_file and keywords:
-    # Extract text from uploaded PDF
+    if keyword:
+        search_terms.append({"word": keyword, "type": value_type})
+
+# Process PDF if uploaded
+if uploaded_file and search_terms:
     text_data = extract_text_from_pdf(uploaded_file)
+    extracted_data = find_values_near_keywords(text_data, search_terms)
+    structured_df = process_extracted_data(extracted_data)
 
-    # Extract structured data based on user input
-    structured_data = extract_and_clean_data(text_data, keywords)
-
-    if structured_data:
-        # Save extracted data to Excel
-        excel_file = export_to_excel(structured_data)
-
-        # Display extracted data in Streamlit
+    # Display extracted data in Streamlit
+    if not structured_df.empty:
         st.subheader("📊 Extracted Data Preview")
-        st.dataframe(pd.DataFrame(structured_data))
+        st.dataframe(structured_df)
 
-        # Provide download link for Excel file
+        # Save and provide download link for Excel file
+        excel_file = export_to_excel(structured_df)
         with open(excel_file, "rb") as f:
             st.download_button("📥 Download Extracted Data", f, file_name="extracted_data.xlsx",
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
     else:
         st.warning("❌ No structured data found. Try adjusting the keywords or check the PDF format.")
-
-
-
-
