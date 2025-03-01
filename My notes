@@ -68,3 +68,98 @@ def main():
 # Run the program
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+import fitz  # PyMuPDF for PDF text extraction
+import pandas as pd
+import streamlit as st
+import streamlit.web.cli as stcli
+
+
+import os
+
+
+# Function to extract text from an uploaded PDF file
+def extract_text_from_pdf(uploaded_file):
+    doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+    all_text = []
+
+    for page in doc:
+        text = page.get_text("text")
+        all_text.extend(text.split("\n"))  # Store each line separately
+
+    return all_text
+
+
+# Function to extract structured data dynamically
+def extract_and_clean_data(text_lines, keywords):
+    structured_data = []
+    i = 0
+    keyword_list = [kw.strip() for kw in keywords.split(",")]  # Convert user input into list
+
+    while i < len(text_lines) - len(keyword_list):  # Ensure enough lines for extraction
+        if all(text_lines[i + j].strip() == keyword_list[j] for j in range(len(keyword_list))):
+            # Extract data from next line(s) assuming values appear below headers
+            values = [text_lines[i + len(keyword_list) + j].strip() for j in range(len(keyword_list))]
+
+            if len(values) == len(keyword_list):
+                structured_data.append(dict(zip(keyword_list, values)))
+
+            i += len(keyword_list) + len(values)  # Move index forward
+        else:
+            i += 1  # Continue searching
+
+    return structured_data
+
+
+# Function to export structured data to Excel
+def export_to_excel(structured_data):
+    df = pd.DataFrame(structured_data)
+
+    if df.empty:
+        return None
+
+    output_path = "extracted_data.xlsx"
+    df.to_excel(output_path, index=False)
+    return output_path
+
+
+# Streamlit UI
+st.title("📄 PDF Data Extractor")
+
+# Upload PDF file
+uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
+
+# Text input for user-defined fields
+keywords = st.text_input("Enter keywords to extract (comma-separated)", "Fund, NAV, Record Date, Distributions")
+
+if uploaded_file and keywords:
+    # Extract text from uploaded PDF
+    text_data = extract_text_from_pdf(uploaded_file)
+
+    # Extract structured data based on user input
+    structured_data = extract_and_clean_data(text_data, keywords)
+
+    if structured_data:
+        # Save extracted data to Excel
+        excel_file = export_to_excel(structured_data)
+
+        # Display extracted data in Streamlit
+        st.subheader("📊 Extracted Data Preview")
+        st.dataframe(pd.DataFrame(structured_data))
+
+        # Provide download link for Excel file
+        with open(excel_file, "rb") as f:
+            st.download_button("📥 Download Extracted Data", f, file_name="extracted_data.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    else:
+        st.warning("❌ No structured data found. Try adjusting the keywords or check the PDF format.")
+
+
+
+
